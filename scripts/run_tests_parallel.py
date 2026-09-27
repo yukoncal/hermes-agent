@@ -543,7 +543,7 @@ def merge_duration_cache_files(paths: List[Path]) -> dict[str, float]:
 def _merge_durations_from_directory(directory: Path, output: Path) -> int:
     files = sorted(directory.glob("**/test_durations.json"))
     merged = merge_duration_cache_files(files)
-    output.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+    output.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Merged {len(merged)} file durations from {len(files)} artifact(s)")
     return 0
 
