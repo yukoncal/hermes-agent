@@ -492,6 +492,25 @@ def _print_inline_failure(
     print(flush=True)
 
 
+def _parse_duration_json(text: str) -> dict[str, float]:
+    """Parse one or more concatenated JSON objects from *text* into a map."""
+    merged: dict[str, float] = {}
+    decoder = json.JSONDecoder()
+    idx = 0
+    length = len(text)
+    while idx < length:
+        chunk = text[idx:].lstrip()
+        if not chunk:
+            break
+        obj, consumed = decoder.raw_decode(chunk)
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if isinstance(key, str) and isinstance(value, (int, float)):
+                    merged[key] = float(value)
+        idx += len(text[idx:]) - len(chunk) + consumed
+    return merged
+
+
 def _load_durations(repo_root: Path) -> dict[str, float]:
     """Read the duration cache from the repo root.
 
@@ -503,9 +522,30 @@ def _load_durations(repo_root: Path) -> dict[str, float]:
     if not path.is_file():
         return {}
     try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+        return _parse_duration_json(path.read_text())
+    except (json.JSONDecodeError, OSError, ValueError):
         return {}
+
+
+def merge_duration_cache_files(paths: List[Path]) -> dict[str, float]:
+    """Merge per-slice ``test_durations.json`` artifacts into one map."""
+    merged: dict[str, float] = {}
+    for path in sorted(paths):
+        if not path.is_file():
+            continue
+        try:
+            merged.update(_parse_duration_json(path.read_text()))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"warning: skipping corrupt duration file {path}: {exc}", file=sys.stderr)
+    return merged
+
+
+def _merge_durations_from_directory(directory: Path, output: Path) -> int:
+    files = sorted(directory.glob("**/test_durations.json"))
+    merged = merge_duration_cache_files(files)
+    output.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Merged {len(merged)} file durations from {len(files)} artifact(s)")
+    return 0
 
 
 def _save_durations(
@@ -519,7 +559,12 @@ def _save_durations(
     repo-relative paths so the cache is portable across checkouts
     and CI runners.
     """
-    data: dict[str, float] = _load_durations(repo_root)
+    # CI matrix slices upload partial duration maps; merging happens in the
+    # save-durations job. Locally we merge with any existing cache.
+    if os.environ.get("HERMES_TEST_SLICE_DURATIONS"):
+        data: dict[str, float] = {}
+    else:
+        data = _load_durations(repo_root)
     for f, t in file_times:
         key = _format_file(f, repo_root)
         data[key] = round(t, 3)
@@ -639,6 +684,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--merge-durations",
+        metavar="DIR",
+        help=(
+            "Merge test_durations.json files under DIR (CI save-durations job). "
+            "Writes test_durations.json to the current working directory."
+        ),
+    )
+    parser.add_argument(
         "paths_positional",
         nargs="*",
         metavar="PATH",
@@ -659,6 +712,13 @@ def main() -> int:
     else:
         our_args, pytest_passthrough = argv, []
     args = parser.parse_args(our_args)
+
+    if args.merge_durations:
+        merge_dir = Path(args.merge_durations)
+        if not merge_dir.is_dir():
+            print(f"error: --merge-durations directory not found: {merge_dir}", file=sys.stderr)
+            return 2
+        return _merge_durations_from_directory(merge_dir, Path.cwd() / _DURATIONS_FILE)
 
     # Parse --slice (or HERMES_TEST_SLICE) early so we can exit on bad input
     # before doing any expensive discovery.
