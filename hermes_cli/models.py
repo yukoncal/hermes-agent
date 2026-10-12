@@ -2367,6 +2367,10 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                     return live
         except Exception:
             pass
+        # Dedicated block already probed fetch_api_models; do not fall through
+        # to the generic profile fetch (ProviderProfile.fetch_models), which
+        # bypasses that mock in tests and merges live /v1/models in CI.
+        return list(_PROVIDER_MODELS.get("gmi", []))
     if normalized == "custom":
         base_url = _get_custom_base_url()
         if base_url:
