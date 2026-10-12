@@ -61,9 +61,11 @@ def test_desktop_ticker_calls_tick_then_stops():
 
     calls = []
     stop = threading.Event()
+    tick_seen = threading.Event()
 
     def fake_tick(*args, **kwargs):
         calls.append(kwargs)
+        tick_seen.set()
         return 0
 
     with patch("cron.scheduler.tick", side_effect=fake_tick):
@@ -74,12 +76,14 @@ def test_desktop_ticker_calls_tick_then_stops():
             daemon=True,
         )
         t.start()
-        time.sleep(0.2)
+        # _start_desktop_cron_ticker resolves the provider before entering the
+        # tick loop; a fixed sleep can set stop before the first tick on slow
+        # CI hosts (import + load_config + provider discovery).
+        assert tick_seen.wait(timeout=5), "desktop ticker never called tick()"
         stop.set()
         t.join(timeout=5)
 
     assert not t.is_alive(), "desktop ticker did not exit after stop_event was set"
-    assert len(calls) >= 1, "desktop ticker never called tick()"
     assert calls[0].get("sync") is False
 
 
