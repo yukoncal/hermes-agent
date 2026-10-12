@@ -2,6 +2,9 @@
 .env
 .env.*
 
+# Desktop bootstrap marker (must survive `hermes update` autostash; #38529)
+.hermes-bootstrap-complete
+
 # Python caching
 __pycache__/
 *.pyc
