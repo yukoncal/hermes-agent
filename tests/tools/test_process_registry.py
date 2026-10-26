@@ -1449,6 +1449,7 @@ class TestPidReuseGuard:
 
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="POSIX SIGTERM→SIGKILL escalation; Windows uses taskkill /F")
+@pytest.mark.live_system_guard_bypass
 class TestSigkillEscalation:
     """Bounded SIGTERM→SIGKILL escalation in _terminate_host_pid.
 
@@ -1567,12 +1568,18 @@ class TestSigkillEscalation:
         try:
             ProcessRegistry._terminate_host_pid(parent.pid)
 
+            def _pid_running(pid: int) -> bool:
+                # Avoid psutil.pid_exists() — on POSIX it probes via os.kill(pid, 0),
+                # which trips tests/conftest.py's live-system guard when a
+                # SIGTERM-ignoring child outlives its parent and gets reparented
+                # outside the test subprocess tree.
+                try:
+                    return ProcessRegistry._proc_alive(psutil.Process(pid))
+                except psutil.NoSuchProcess:
+                    return False
+
             def _all_dead():
-                return not any(
-                    psutil.pid_exists(p)
-                    and ProcessRegistry._proc_alive(psutil.Process(p))
-                    for p in all_pids
-                )
+                return not any(_pid_running(p) for p in all_pids)
 
             assert _wait_until(_all_dead, timeout=4.0), (
                 "entire SIGTERM-ignoring tree (parent + children) must be SIGKILLed"
