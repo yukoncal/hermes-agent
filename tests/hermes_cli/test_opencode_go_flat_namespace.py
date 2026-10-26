@@ -109,8 +109,8 @@ def test_openrouter_still_prepends_vendor():
 
 
 def _run_switch(raw_input: str, **extra):
-    """Call switch_model with opencode-go as current provider, mocking the
-    live catalog so the test doesn't hit the network."""
+    """Call switch_model with opencode-go as current provider, mocking live
+    catalog probes so the test stays offline and deterministic."""
     defaults = dict(
         current_provider="opencode-go",
         current_model="kimi-k2.6",
@@ -126,9 +126,20 @@ def _run_switch(raw_input: str, **extra):
         # For other providers, return empty so tests don't depend on them.
         return []
 
+    def fake_fetch_api_models(api_key, base_url, **kwargs):
+        # switch_model validates via validate_requested_model → fetch_api_models.
+        # Without this mock CI hits the real OpenCode Go /v1/models listing,
+        # which can drift (e.g. deepseek-v4.1-flash auto-correcting flash).
+        if base_url and "opencode.ai" in base_url:
+            return list(_OPENCODE_GO_LIVE)
+        return None
+
     with patch(
         "hermes_cli.model_switch.list_provider_models",
         side_effect=fake_list_provider_models,
+    ), patch(
+        "hermes_cli.models.fetch_api_models",
+        side_effect=fake_fetch_api_models,
     ):
         return switch_model(raw_input=raw_input, **defaults)
 

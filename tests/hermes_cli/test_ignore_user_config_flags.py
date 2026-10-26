@@ -19,8 +19,13 @@ from __future__ import annotations
 import os
 import textwrap
 import importlib
+from pathlib import Path
 
 import pytest
+
+# Deliberately unrealistic model id — must not collide with built-in defaults,
+# cli-config.yaml.example, or a developer's repo-root cli-config.yaml fallback.
+_USER_ONLY_MODEL = "hermes-test-user-config-isolation-marker"
 
 
 @pytest.fixture(autouse=True)
@@ -66,13 +71,13 @@ class TestIgnoreUserConfigEnvGate:
         return cli.load_cli_config
 
     def test_user_config_loaded_when_flag_unset(self, tmp_path, monkeypatch):
-        self._write_user_config(tmp_path, "anthropic/claude-sonnet-4.6")
+        self._write_user_config(tmp_path, _USER_ONLY_MODEL)
         load_cli_config = self._reload_cli(monkeypatch, tmp_path)
 
         cfg = load_cli_config()
 
         # User config value wins
-        assert cfg["model"]["default"] == "anthropic/claude-sonnet-4.6"
+        assert cfg["model"]["default"] == _USER_ONLY_MODEL
         assert cfg["agent"]["system_prompt"] == "from user config"
 
     def test_user_config_skipped_when_flag_set(self, tmp_path, monkeypatch):
@@ -81,30 +86,39 @@ class TestIgnoreUserConfigEnvGate:
         The built-in default ``model.default`` is empty string (no user override),
         and the user's ``agent.system_prompt`` is not seen.
         """
-        self._write_user_config(tmp_path, "anthropic/claude-sonnet-4.6")
+        self._write_user_config(tmp_path, _USER_ONLY_MODEL)
         monkeypatch.setenv("HERMES_IGNORE_USER_CONFIG", "1")
 
         load_cli_config = self._reload_cli(monkeypatch, tmp_path)
+        # Hide repo-root cli-config.yaml so this test only exercises the
+        # user-config bypass (project fallback is covered separately).
+        project_cfg = Path(__file__).resolve().parents[2] / "cli-config.yaml"
+        _path_exists = Path.exists
+
+        def _exists(self):
+            if self == project_cfg:
+                return False
+            return _path_exists(self)
+
+        monkeypatch.setattr(Path, "exists", _exists)
         cfg = load_cli_config()
 
         # User-set "system_prompt: from user config" MUST NOT leak through
         assert cfg["agent"].get("system_prompt", "") != "from user config"
 
-        # User-set model.default MUST NOT leak through — either the built-in
-        # default ("" or unset) or a project-level fallback, but never the
-        # user's value
-        assert cfg["model"].get("default", "") != "anthropic/claude-sonnet-4.6"
+        # User-set model.default MUST NOT leak through — built-in default only.
+        assert cfg["model"].get("default", "") == ""
 
     def test_flag_ignored_when_set_to_other_value(self, tmp_path, monkeypatch):
         """Only the literal value "1" activates the bypass, matching the yolo pattern."""
-        self._write_user_config(tmp_path, "anthropic/claude-sonnet-4.6")
+        self._write_user_config(tmp_path, _USER_ONLY_MODEL)
         monkeypatch.setenv("HERMES_IGNORE_USER_CONFIG", "true")  # not "1"
 
         load_cli_config = self._reload_cli(monkeypatch, tmp_path)
         cfg = load_cli_config()
 
         # "true" != "1", so user config IS loaded
-        assert cfg["model"]["default"] == "anthropic/claude-sonnet-4.6"
+        assert cfg["model"]["default"] == _USER_ONLY_MODEL
 
 
 class TestIgnoreRulesEnvGate:
